@@ -85,6 +85,8 @@ INSTALLED_APPS = [
     'wagtailsurveys',
     'wagtail.contrib.wagtailsitemaps',
 
+    'personalisation',
+
     'mptt',
     'django.contrib.sites',
     'google_analytics',
