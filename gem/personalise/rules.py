@@ -1,290 +1,166 @@
-import datetime
-import re
+import pytest
 
-from django.conf import settings
-from django.apps import apps
-from django.core.exceptions import ValidationError
-from django.db import models
-from django.db.models.constants import LOOKUP_SEP
-from django.utils import timezone
-from django.utils.translation import ugettext_lazy as _
-from django.utils.text import capfirst
+from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.test import TestCase, RequestFactory
+from django.test.client import Client
 
-from wagtail.wagtailadmin.edit_handlers import FieldPanel
+from personalisation.models import Segment
 
-from personalisation.rules import AbstractBaseRule
+from ..rules import ProfileDataRule
 
+@pytest.mark.django_db
+class TestProfileDataRuleSegmentation(TestCase):
+    def setUp(self):
+        self.request_factory = RequestFactory()
 
-PERSONALISATION_PROFILE_DATA_FIELDS = [
-    '{}__date_joined'.format(settings.AUTH_USER_MODEL),
-    'profiles.UserProfile__date_of_birth',
-    'gem.GemUserProfile__gender'
-]
+        # Fabricate a request with a logged-in user
+        # so we can use it to test the segment rule
+        user = get_user_model().objects \
+                               .create_user(username='tester',
+                                            email='tester@example.com',
+                                            password='tester')
+        self.request = self.request_factory.get('/')
+        self.request.user = user
 
+    def set_user_to_male(self):
+        # Set user to male
+        self.request.user.profile.gender = 'm'
+        self.request.user.save()
 
-def get_field_choices_for_profile_data_personalisation(fields):
-    """
-    Get a tuple of choices for profile fields personaliastion out of
-    a list of specified fields in the "app.Model__field" format,
-    e.g. "auth.User__date_joined".
-    """
-    choices = []
+    def set_user_to_female(self):
+        self.request.user.profile.gender = 'f'
+        self.request.user.save()
 
-    for model in set([apps.get_model(f.split(LOOKUP_SEP, 1)[0]) for f in fields]):
-        model_verbose = capfirst(model._meta.verbose_name)
-        base_accessor = model._meta.label + LOOKUP_SEP
-        for field in model._meta.get_fields():
-            accessor = base_accessor + field.name
-            if accessor in fields:
-                choices.append((accessor, '%s - %s' % (model_verbose,
-                                                       capfirst(field.verbose_name))))
+    def set_user_to_unspecified(self):
+        self.request.user.profile.gender = '-'
+        self.request.user.save()
 
-    return choices
+    def test_unspecified_passes_unspecified_rule(self):
+        self.set_user_to_unspecified()
+        unspecified_rule = ProfileDataRule(field='profiles.userprofile__gender',
+                                           value='-')
 
-class ProfileDataRule(AbstractBaseRule):
-    """
-    Segmentation rule for wagtail-personalisation that evaluates data associated
-    with user profile and related models.
-    """
-    LESS_THAN = 'lt'
-    LESS_THAN_OR_EQUAL = 'lte'
-    GREATER_THAN = 'gt'
-    GREATER_THAN_OR_EQUAL = 'gte'
-    EQUAL = 'eq'
-    NOT_EQUAL = 'neq'
+        self.assertTrue(unspecified_rule.test_user(self.request))
 
-    OLDER_THAN = 'ol'
-    OLDER_THAN_OR_EQUAL = 'ole'
-    YOUNGER_THAN = 'yg'
-    YOUNGER_THAN_OR_EQUAL = 'yge'
-    OF_AGE = 'eqa'
+    def test_male_passes_male_rule(self):
+        self.set_user_to_male()
+        male_rule = ProfileDataRule(field='profiles.userprofile__gender',
+                                    value='m')
 
-    REGEX = 'reg'
+        self.assertTrue(male_rule.test_user(self.request))
 
-    AGE_OPERATORS = (OLDER_THAN, OLDER_THAN_OR_EQUAL, YOUNGER_THAN,
-                     YOUNGER_THAN_OR_EQUAL, OF_AGE)
+    def test_female_passes_female_rule(self):
+        self.set_user_to_female()
+        female_rule = ProfileDataRule(field='profiles.userprofile__gender',
+                                      value='f')
 
-    OPERATOR_CHOICES = (
-        (LESS_THAN, _('Less than')),
-        (LESS_THAN_OR_EQUAL, _('Less than or equal')),
-        (GREATER_THAN, _('Greater than')),
-        (GREATER_THAN_OR_EQUAL, _('Greater than or equal')),
-        (EQUAL, _('Equal')),
-        (NOT_EQUAL, _('Not equal')),
-        (OLDER_THAN, _('Older than')),
-        (OLDER_THAN_OR_EQUAL, _('Older than or equal')),
-        (YOUNGER_THAN, _('Younger than')),
-        (YOUNGER_THAN_OR_EQUAL, _('Younger than or equal')),
-        (OF_AGE, _('Of age')),
-        (REGEX, _('Regex')),
-    )
+        self.assertTrue(female_rule.test_user(self.request))
 
-    field = models.CharField(max_length=255)
-    operator = models.CharField(max_length=3, choices=OPERATOR_CHOICES,
-                                default=EQUAL)
-    value = models.CharField(max_length=255)
+    def test_unspecified_fails_female_rule(self):
+        self.set_user_to_unspecified()
+        female_rule = ProfileDataRule(field='profiles.userprofile__gender',
+                                      value='f')
 
-    panels = [
-        FieldPanel('field'),
-        FieldPanel('operator'),
-        FieldPanel('value'),
-    ]
+        self.assertFalse(female_rule.test_user(self.request))
 
-    class Meta:
-        verbose_name = _('Profile Data Rule')
+    def test_female_fails_unspecified_rule(self):
+        self.set_user_to_female()
+        unspecified_rule = ProfileDataRule(field='profiles.userprofile__gender',
+                                           value='-')
 
-    def __init__(self, *args, **kwargs):
-        # Get field names for personalisation in the constructor since
-        # they require the app registry to be ready.
-        choices = get_field_choices_for_profile_data_personalisation(
-            PERSONALISATION_PROFILE_DATA_FIELDS)
-        self._meta.get_field('field').choices = choices
+        self.assertFalse(unspecified_rule.test_user(self.request))
 
-        super(ProfileDataRule, self).__init__(*args, **kwargs)
+    def test_male_fails_unspecified_rule(self):
+        self.set_user_to_male()
+        unspecified_rule = ProfileDataRule(field='profiles.userprofile__gender',
+                                           value='-')
 
-    def clean(self):
-        # Deal with regular expression operator.
-        if self.operator == self.REGEX:
-            # Make sure value is a valid regular expression string.
-            try:
-                re.compile(self.value)
-            except re.error as error:
-                raise ValidationError({
-                    'value': _('Regular expression error: %s') % (error,)
-                })
+        self.assertFalse(unspecified_rule.test_user(self.request))
+
+    def test_unexisting_profile_field_fails(self):
+        rule = ProfileDataRule(field='auth.User__non_existing_field',
+                               value='l')
+        with self.assertRaises(FieldDoesNotExist):
+            rule.test_user(self.request)
 
 
-        # Deal with age opeartors.
-        elif self.operator in self.AGE_OPERATORS:
-            # Works only on DateField.
-            if not isinstance(self.get_related_field(), models.DateField):
-                raise ValidationError({
-                    'operator': _('You can choose age operators only on date '
-                                  'and date-time fields.')
-                })
+    def test_not_implemented_model_raises_exception(self):
+        rule = ProfileDataRule(field='lel.not_existing_model__date_joined',
+                               value='2')
 
-            try:
-                self.value = int(self.value)
-            except ValueError:
-                raise ValidationError({
-                    'value': _('Value has to be a whole integer when using '
-                               'age operators.')
-                })
-            else:
-                if self.value < 0:
-                    raise ValidationError({
-                        'value': _('Value has to be non-negative since it '
-                                   'represents age.')
-                    })
+        with self.assertRaises(LookupError):
+            rule.test_user(self.request)
 
+    def test_not_logged_in_user_fails(self):
+        rule = ProfileDataRule(field='auth.User__date_joined',
+                               value='2012-09-23')
+        self.request.user = AnonymousUser()
 
-        # Deal with normal operators.
-        else:
-            # Reassign all errors to the "value" field.
-            try:
-                self.get_related_field().clean(self.value, None)
-            except ValidationError as error:
-                raise ValidationError({'value': error})
+        self.assertFalse(rule.test_user(self.request))
 
-    def get_related_model_and_field(self):
-        """Get model and field instances from self.field."""
-        model_name, field_name = self.field.split(LOOKUP_SEP, 1)
-        model = apps.get_model(model_name)
-        field = model._meta.get_field(field_name)
+    def test_none_value_on_related_field_fails(self):
+        rule = ProfileDataRule(field='auth.User__date_joined',
+                               value='2012-09-23')
 
-        return model, field
+        self.request.user.date_joined = None
 
-    def get_related_model(self):
-        """Get model instance from self.field."""
-        return self.get_related_model_and_field()[0]
+        self.assertFalse(rule.test_user(self.request))
 
-    def get_related_field(self):
-        """Get field instance from self.field."""
-        return self.get_related_model_and_field()[1]
+    def test_none_value_with_not_equal_rule_field_passes(self):
+        rule = ProfileDataRule(field='auth.User__date_joined',
+                               operator=ProfileDataRule.NOT_EQUAL,
+                               value='2012-09-23')
 
-    def get_related_field_name(self):
-        """Get field name from self.field."""
-        return self.get_related_field().name
+        self.request.user.date_joined = None
 
-    def get_python_value(self):
-        """Return self.value in its Python format."""
-        # Treat self.value as age and return a whole integer.
-        if self.operator in self.AGE_OPERATORS:
-            return int(self.value)
-
-        # Treat self.value as regex and return regex instance.
-        if self.operator == self.REGEX:
-            return re.compile(self.value)
-
-        # Treat self.value as anything and return value in format specific
-        # to the field in self.field.
-        return self.get_related_field().to_python(self.value)
-
-    def get_related_field_value(self, user):
-        """
-        Get value of a field in self.field. Any model in self.field has to have
-        a direct relationship to the user model.
-        """
-        # Check whether we try to access the main user model, as opposed to
-        # related models.
-        if user._meta.model is self.get_related_model():
-            return getattr(user, self.get_related_field_name())
+        self.assertTrue(rule.test_user(self.request))
 
 
-        # Obtain user model's field name with relation to the related model
-        # we need to access, e.g. GemUserProfile would be 'gem_profile'.
-        for f in user._meta.get_fields():
-            if f.related_model is self.get_related_model():
-                instance = getattr(user, f.name)
-                return getattr(instance, self.get_related_field_name())
+@pytest.mark.django_db
+class TestProfileDataRuleValidation(TestCase):
+    def setUp(self):
+        self.segment = Segment.objects.create()
 
-        raise LookupError('Cannot find related model on user\'s model')
+    def test_invalid_regex_value_raises_validation_error(self):
+        rule = ProfileDataRule(segment=self.segment,
+                               operator=ProfileDataRule.REGEX,
+                               field='aith.User__date_joined',
+                               value='[')
 
-    def description(self):
-        return {
-            'title': _('Based on profile data'),
-            'value': _('"%s" %s "%s"') % (
-                self._get_FIELD_display(self._meta.get_field('field')),
-                self.get_operator_display(),
-                self.value
-            )
-        }
+        with self.assertRaises(ValidationError) as context:
+            rule.full_clean()
 
-    def test_user(self, request):
-        # Fail segmentation if user is not logged-in.
-        if not request.user.is_authenticated():
-            return False
+        found = False
 
+        for msg in context.exception.messages:
+            if msg.startswith('Regular expression error'):
+                found = True
+                break
 
-        # Handy variables for comparisons.
-        python_value = self.get_python_value()
-        related_field_value = self.get_related_field_value(user=request.user)
+        self.failIf(not found)
 
+    def test_age_operator_on_non_date_field_raises_validation_error(self):
+        rule = ProfileDataRule(segment=self.segment,
+                               operator=ProfileDataRule.OF_AGE,
+                               field='gem.GemUserProfile__gender',
+                               value='1')
 
-        # Handle null (None) values in the related field
-        if related_field_value is None:
-            # If that value is None, we should fail it unless "not equals"
-            # operator is set
-            return self.operator == self.NOT_EQUAL
+        with self.assertRaises(ValidationError) as context:
+            rule.full_clean()
 
+        self.assertIn('You can choose age operators only on date and '
+                      'date-time fields.', context.exception.messages)
 
-        # Deal with regex operator.
-        if self.operator == self.REGEX:
-            return python_value.match(str(related_field_value)) is not None
+    def test_age_operator_on_negative_numbers_raises_validation_error(self):
+        rule = ProfileDataRule(segment=self.segment,
+                               operator=ProfileDataRule.OF_AGE,
+                               field='profiles.UserProfile__date_of_birth',
+                               value='-1')
 
+        with self.assertRaises(ValidationError) as context:
+            rule.full_clean()
 
-        # Deal with age operators.
-        if self.operator in self.AGE_OPERATORS:
-            # Convert datetime to date if it is a datetime.
-            dob = related_field_value.date() if isinstance(related_field_value,
-                                                           datetime.datetime) \
-                                             else related_field_value
-
-            # Field has to be a date.
-            if not isinstance(dob, datetime.date):
-                raise RuntimeError('{} is not a date or datetime instance.')
-
-            # Calculate age.
-            today = timezone.now().date()
-            age = int((today - dob).days / 365.25)
-
-            # Compare age.
-            if self.operator == self.OF_AGE:
-                return age == python_value
-
-            if self.operator == self.YOUNGER_THAN:
-                return age < python_value
-
-            if self.operator == self.YOUNGER_THAN_OR_EQUAL:
-                return age <= python_value
-
-            if self.operator == self.OLDER_THAN:
-                return age > python_value
-
-            if self.operator == self.OLDER_THAN_OR_EQUAL:
-                return age >= python_value
-
-
-        # Deal with comparison operators.
-        if self.operator == self.LESS_THAN:
-            return related_field_value < python_value
-
-        if self.operator == self.LESS_THAN_OR_EQUAL:
-            return related_field_value <= python_value
-
-        if self.operator == self.GREATER_THAN:
-            return related_field_value > python_value
-
-        if self.operator == self.GREATER_THAN_OR_EQUAL:
-            return related_field_value >= python_value
-
-        if self.operator == self.EQUAL:
-            return related_field_value == python_value
-
-        if self.operator == self.NOT_EQUAL:
-            return related_field_value != python_value
-
-
-        raise NotImplementedError('Operator "{}" not implemented on {}.'
-                                  'test_user.'.format(self.operator,
-                                                      type(self).__name__))
+        self.assertIn('Value has to be non-negative since it represents age.',
+                      context.exception.messages)
