@@ -59,6 +59,7 @@ INSTALLED_APPS = [
 
     'molo.core',
     'gem',
+    'gem.personalise',
     'molo.profiles',
     'molo.surveys',
     'django_comments',
