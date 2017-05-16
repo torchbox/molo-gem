@@ -1,1 +1,1 @@
-from rules import GemUserProfileRule
+from .rules import ProfileDataRule

@@ -1,3 +1,4 @@
+from django.contrib.auth.models import User
 from django.utils.translation import ugettext_lazy as _
 from django.db import models
 
@@ -5,25 +6,38 @@ from wagtail.wagtailadmin.edit_handlers import FieldPanel
 
 from personalisation.rules import AbstractBaseRule
 
-from gem.models import GemUserProfile
+from molo.profiles.models import UserProfile
 
 
-ALLOWED_FIELDS = ['gender']
+def get_profile_fields_for_personalisation(allowed_fields, models):
+    """
+    Get a tuple of choices for profile fields in personaliastion.
+    """
+    choices = []
 
+    for model in models:
+        for field in model._meta.fields:
+            if '{}__{}'.format(model._meta.model_name, field.name) in allowed_fields:
+                choices += [(
+                    '{}__{}'.format(model._meta.model_name, field.name),
+                    '{} - {}'.format(model._meta.verbose_name.title(),
+                                     field.verbose_name.title())
+                )]
 
-def get_profile_fields_for_personalisation(allowed_fields):
-    """Get a tuple of choices for profile fields in personaliastion."""
-    model_fields = GemUserProfile._meta.fields
+    return choices
 
-    fields = [f for f in model_fields if f.name in allowed_fields]
+FIELD_MODELS = [User, UserProfile]
+ALLOWED_FIELDS = [
+    'user__date_joined',
+    'userprofile__date_of_birth',
+    'userprofile__gender'
+]
+CHOICES = get_profile_fields_for_personalisation(ALLOWED_FIELDS, FIELD_MODELS)
 
-    return tuple([(field.name, field.verbose_name.title()) for field in fields])
-
-
-class GemUserProfileRule(AbstractBaseRule):
+class ProfileDataRule(AbstractBaseRule):
     field = models.CharField(
         max_length=255,
-        choices=get_profile_fields_for_personalisation(ALLOWED_FIELDS)
+        choices=CHOICES
     )
     value = models.CharField(max_length=255)
 
@@ -33,16 +47,23 @@ class GemUserProfileRule(AbstractBaseRule):
     ]
 
     def __init__(self, *args, **kwargs):
-        super(GemUserProfileRule, self).__init__(*args, **kwargs)
+        super(ProfileDataRule, self).__init__(*args, **kwargs)
 
     def __str__(self):
         return _('GEM Profile Data')
 
     def description(self):
+        field_name = ''
+
+        for choice in CHOICES:
+            if choice[0] == self.field:
+                field_name = choice[1]
+                break
+
         description = {
             'title': _('Based on profile data'),
-            'value': _('"{}" is "{}"').format(
-                self.field,
+            'value': _('{}: "{}"').format(
+                field_name or self.field,
                 self.value
             ),
         }
@@ -50,9 +71,24 @@ class GemUserProfileRule(AbstractBaseRule):
         return description
 
     def test_user(self, request):
-        # If gem profile has attribute test it
-        if hasattr(request.user.gem_profile, self.field):
-            return getattr(request.user.gem_profile, self.field) == self.value
+        if not request.user.is_authenticated():
+            return False
+
+        model_name, field_name = self.field.split('__', 1)
+
+        if model_name == 'userprofile':
+            instance = request.user.profile
+        elif model_name == 'user':
+            instance = request.user
+        else:
+            raise NotImplementedError('{} not implemented on {}.test_user.'.format(
+                model_name,
+                type(self).__name__
+            ))
+
+        # Check whether given field_name exists
+        if hasattr(instance, field_name):
+            return getattr(instance, field_name) == self.value
 
         # Otherwise just fail
         return False
