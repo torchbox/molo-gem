@@ -8,18 +8,23 @@ from personalisation.rules import AbstractBaseRule
 from gem.models import GemUserProfile
 
 
-def get_profile_fields_for_personalisation():
+ALLOWED_FIELDS = ['gender']
+
+
+def get_profile_fields_for_personalisation(allowed_fields):
     """Get a tuple of choices for profile fields in personaliastion."""
     model_fields = GemUserProfile._meta.fields
-    ALLOWED_FIELDS = ['gender']
-    fields = [f for f in model_fields if f.name in ALLOWED_FIELDS]
+
+    fields = [f for f in model_fields if f.name in allowed_fields]
 
     return tuple([(field.name, field.verbose_name.title()) for field in fields])
 
 
 class GemUserProfileRule(AbstractBaseRule):
-    field = models.CharField(max_length=255,
-                             choices=get_profile_fields_for_personalisation())
+    field = models.CharField(
+        max_length=255,
+        choices=get_profile_fields_for_personalisation(ALLOWED_FIELDS)
+    )
     value = models.CharField(max_length=255)
 
     panels = [
@@ -45,4 +50,10 @@ class GemUserProfileRule(AbstractBaseRule):
         return description
 
     def test_user(self, request):
-        return getattr(request.user.gem_profile, self.field) == self.value
+        # If gem profile has attribute test it
+        if hasattr(request.user.gem_profile, self.field):
+            return getattr(request.user.gem_profile, self.field) == self.value
+
+        # Otherwise just fail
+        return False
+
