@@ -91,7 +91,7 @@ class ProfileDataRule(AbstractBaseRule):
     ]
 
     class Meta:
-        verbose_name = _('Profile Data Rule')
+        verbose_name = 'Profile Data Rule'
 
     def __init__(self, *args, **kwargs):
         # Get field names for personalisation in the constructor since
@@ -200,18 +200,15 @@ class ProfileDataRule(AbstractBaseRule):
 
         raise LookupError('Cannot find related model on user\'s model')
 
-    @property
     def description(self):
-        description = {
+        return {
             'title': _('Based on profile data'),
-            'value': _('"{}" {} "{}"') % (
+            'value': _('"%s" %s "%s"') % (
                 self._get_FIELD_display(self._meta.get_field('field')),
                 self.get_operator_display(),
                 self.value
             )
         }
-
-        return description
 
     def test_user(self, request):
         # Fail segmentation if user is not logged-in.
