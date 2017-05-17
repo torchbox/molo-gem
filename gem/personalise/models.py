@@ -39,6 +39,7 @@ class PersonalisableSurvey(MoloSurveyPage):
     wagtail-personalisation.
     """
     content_panels = get_personalisable_survey_content_panels()
+    template = MoloSurveyPage.template
 
     class Meta:
         verbose_name = _('personalisable survey')
@@ -81,10 +82,6 @@ class PersonalisableSurvey(MoloSurveyPage):
             data_fields.append((field.clean_name, label))
 
         return data_fields
-
-    def get_template(self, request):
-        # Use MoloSurveyPage's template
-        return super(PersonalisableSurvey, self).get_template(request)
 
     def serve(self, request, *args, **kwargs):
         # We need request data in self.get_form_fields() to perform
