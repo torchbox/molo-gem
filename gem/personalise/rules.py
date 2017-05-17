@@ -91,7 +91,7 @@ class ProfileDataRule(AbstractBaseRule):
     ]
 
     class Meta:
-        verbose_name = _('Profile Data Rule')
+        verbose_name = 'Profile Data Rule'
 
     def __init__(self, *args, **kwargs):
         # Get field names for personalisation in the constructor since
