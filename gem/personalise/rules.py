@@ -43,7 +43,7 @@ def get_field_choices_for_profile_data_personalisation(fields):
 
 class ProfileDataRule(AbstractBaseRule):
     """
-    Segmentation rule for wagtail-personaliastion that evaluates data associated
+    Segmentation rule for wagtail-personalisation that evaluates data associated
     with user profile and related models.
     """
     LESS_THAN = 'lt'
@@ -90,22 +90,22 @@ class ProfileDataRule(AbstractBaseRule):
         FieldPanel('value'),
     ]
 
+    class Meta:
+        verbose_name = _('Profile Data Rule')
+
     def __init__(self, *args, **kwargs):
         # Get field names for personalisation in the constructor since
-        # they require the app registry to be ready
+        # they require the app registry to be ready.
         choices = get_field_choices_for_profile_data_personalisation(
             PERSONALISATION_PROFILE_DATA_FIELDS)
         self._meta.get_field('field').choices = choices
 
         super(ProfileDataRule, self).__init__(*args, **kwargs)
 
-    def __str__(self):
-        return _('GEM Profile Data')
-
     def clean(self):
-        # Deal with regular expression operator
+        # Deal with regular expression operator.
         if self.operator == self.REGEX:
-            # Make sure value is a valid regular expression string
+            # Make sure value is a valid regular expression string.
             try:
                 re.compile(self.value)
             except re.error as error:
@@ -114,9 +114,9 @@ class ProfileDataRule(AbstractBaseRule):
                 })
 
 
-        # Deal with age opeartors
+        # Deal with age opeartors.
         elif self.operator in self.AGE_OPERATORS:
-            # Works only on DateField
+            # Works only on DateField.
             if not isinstance(self.get_related_field(), models.DateField):
                 raise ValidationError({
                     'operator': _('You can choose age operators only on date '
@@ -138,9 +138,9 @@ class ProfileDataRule(AbstractBaseRule):
                     })
 
 
-        # Deal with normal operators
+        # Deal with normal operators.
         else:
-            # Reassign all errors to the "value" field
+            # Reassign all errors to the "value" field.
             try:
                 self.get_related_field().clean(self.value, None)
             except ValidationError as error:
@@ -214,36 +214,37 @@ class ProfileDataRule(AbstractBaseRule):
         return description
 
     def test_user(self, request):
-        # Fail segmentation if user is not logged-in
+        # Fail segmentation if user is not logged-in.
         if not request.user.is_authenticated():
             return False
 
 
-        # Handy variables for comparisons
+        # Handy variables for comparisons.
         python_value = self.get_python_value()
         related_field_value = self.get_related_field_value(user=request.user)
 
 
-        # Deal with regex operator
+        # Deal with regex operator.
         if self.operator == self.REGEX:
             return python_value.match(str(related_field_value)) is not None
 
 
-        # Deal with age operators
+        # Deal with age operators.
         if self.operator in self.AGE_OPERATORS:
-            # Convert datetime to date if it is a datetime
+            # Convert datetime to date if it is a datetime.
             dob = related_field_value.date() if isinstance(related_field_value,
                                                            datetime.datetime) \
                                              else related_field_value
 
-            # Field has to be a date
+            # Field has to be a date.
             if not isinstance(dob, datetime.date):
                 raise RuntimeError('{} is not a date or datetime instance.')
 
-            # Calculate age
+            # Calculate age.
             today = timezone.now().date()
             age = int((today - dob).days / 365.25)
 
+            # Compare age.
             if self.operator == self.OF_AGE:
                 return age == python_value
 
@@ -260,7 +261,7 @@ class ProfileDataRule(AbstractBaseRule):
                 return age >= python_value
 
 
-        # Deal with comparison operetaros
+        # Deal with comparison operators.
         if self.operator == self.LESS_THAN:
             return related_field_value < python_value
 
