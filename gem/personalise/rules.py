@@ -270,13 +270,13 @@ class ProfileDataRule(AbstractBaseRule):
         if self.operator == self.GREATER_THAN:
             return related_field_value > python_value
 
-        if self.operator == self. GREATER_THAN_OR_EQUAL:
+        if self.operator == self.GREATER_THAN_OR_EQUAL:
             return related_field_value >= python_value
 
-        if self.operator == self. EQUAL:
+        if self.operator == self.EQUAL:
             return related_field_value == python_value
 
-        if self.operator == self. NOT_EQUAL:
+        if self.operator == self.NOT_EQUAL:
             return related_field_value != python_value
 
 
