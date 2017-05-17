@@ -221,6 +221,13 @@ class ProfileDataRule(AbstractBaseRule):
         related_field_value = self.get_related_field_value(user=request.user)
 
 
+        # Handle null (None) values in the related field
+        if related_field_value is None:
+            # If that value is None, we should fail it unless "not equals"
+            # operator is set
+            return True if self.operator == self.NOT_EQUAL else False
+
+
         # Deal with regex operator.
         if self.operator == self.REGEX:
             return python_value.match(str(related_field_value)) is not None
