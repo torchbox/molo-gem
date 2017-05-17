@@ -1,130 +1,211 @@
 import datetime
 import re
 
-from django.contrib.auth.models import User
+from django.conf import settings
+from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.utils.translation import ugettext_lazy as _
-from django.utils import timezone
 from django.db import models
+from django.db.models.constants import LOOKUP_SEP
+from django.utils import timezone
+from django.utils.translation import ugettext_lazy as _
+from django.utils.text import capfirst
 
 from wagtail.wagtailadmin.edit_handlers import FieldPanel
 
-from molo.profiles.models import UserProfile
 from personalisation.rules import AbstractBaseRule
 
-from gem.models import GemUserProfile
 
-def get_profile_fields_for_personalisation(allowed_fields, models):
+PERSONALISATION_PROFILE_DATA_FIELDS = [
+    '{}__date_joined'.format(settings.AUTH_USER_MODEL),
+    'profiles.UserProfile__date_of_birth',
+    'gem.GemUserProfile__gender'
+]
+
+
+def get_field_choices_for_profile_data_personalisation(fields):
     """
-    Get a tuple of choices for profile fields in personaliastion.
+    Get a tuple of choices for profile fields personaliastion out of
+    a list of specified fields in the "app.Model__field" format,
+    e.g. "auth.User__date_joined".
     """
     choices = []
 
-    for model in models:
-        for field in model._meta.fields:
-            if '{}__{}'.format(model._meta.model_name, field.name) in allowed_fields:
-                choices += [(
-                    '{}__{}'.format(model._meta.model_name, field.name),
-                    '{} - {}'.format(model._meta.verbose_name.title(),
-                                     field.verbose_name.title())
-                )]
+    for model in set([apps.get_model(f.split(LOOKUP_SEP, 1)[0]) for f in fields]):
+        model_verbose = capfirst(model._meta.verbose_name)
+        base_accessor = model._meta.label + LOOKUP_SEP
+        for field in model._meta.get_fields():
+            accessor = base_accessor + field.name
+            if accessor in fields:
+                choices.append((accessor, '%s - %s' % (model_verbose,
+                                                       capfirst(field.verbose_name))))
 
     return choices
 
-
-def get_model_by_name(name):
-    return {m._meta.model_name: m for m in FIELD_MODELS}[name]
-
-
-FIELD_MODELS = [User, UserProfile, GemUserProfile]
-ALLOWED_FIELDS = [
-    'user__date_joined',
-    'userprofile__date_of_birth',
-    'gemuserprofile__gender'
-]
-CHOICES = get_profile_fields_for_personalisation(ALLOWED_FIELDS, FIELD_MODELS)
-
 class ProfileDataRule(AbstractBaseRule):
+    """
+    Segmentation rule for wagtail-personaliastion that evaluates data associated
+    with user profile and related models.
+    """
+    LESS_THAN = 'lt'
+    LESS_THAN_OR_EQUAL = 'lte'
+    GREATER_THAN = 'gt'
+    GREATER_THAN_OR_EQUAL = 'gte'
+    EQUAL = 'eq'
+    NOT_EQUAL = 'neq'
+
+    OLDER_THAN = 'ol'
+    OLDER_THAN_OR_EQUAL = 'ole'
+    YOUNGER_THAN = 'yg'
+    YOUNGER_THAN_OR_EQUAL = 'yge'
+    OF_AGE = 'eqa'
+
+    REGEX = 'reg'
+
+    AGE_OPERATORS = (OLDER_THAN, OLDER_THAN_OR_EQUAL, YOUNGER_THAN,
+                     YOUNGER_THAN_OR_EQUAL, OF_AGE)
+
     OPERATOR_CHOICES = (
-        ('lt', _('Less than')),
-        ('lte', _('Less than or equal')),
-        ('gt', _('Greater than')),
-        ('gte', _('Greater than or equal')),
-        ('eq', _('Equal')),
-        ('neq', _('Not equal')),
-        ('old', _('Older than')),
-        ('ygr', _('Younger than')),
-        ('eqa', _('Of age')),
-        ('reg', _('Regex')),
+        (LESS_THAN, _('Less than')),
+        (LESS_THAN_OR_EQUAL, _('Less than or equal')),
+        (GREATER_THAN, _('Greater than')),
+        (GREATER_THAN_OR_EQUAL, _('Greater than or equal')),
+        (EQUAL, _('Equal')),
+        (NOT_EQUAL, _('Not equal')),
+        (OLDER_THAN, _('Older than')),
+        (OLDER_THAN_OR_EQUAL, _('Older than or equal')),
+        (YOUNGER_THAN, _('Younger than')),
+        (YOUNGER_THAN_OR_EQUAL, _('Younger than or equal')),
+        (OF_AGE, _('Of age')),
+        (REGEX, _('Regex')),
     )
 
-    field = models.CharField(max_length=255, choices=CHOICES)
-    operator = models.CharField(max_length=3, choices=OPERATOR_CHOICES)
+    field = models.CharField(max_length=255)
+    operator = models.CharField(max_length=3, choices=OPERATOR_CHOICES,
+                                default=EQUAL)
     value = models.CharField(max_length=255)
 
     panels = [
         FieldPanel('field'),
         FieldPanel('operator'),
-        FieldPanel('value')
+        FieldPanel('value'),
     ]
 
     def __init__(self, *args, **kwargs):
+        # Get field names for personalisation in the constructor since
+        # they require the app registry to be ready
+        choices = get_field_choices_for_profile_data_personalisation(
+            PERSONALISATION_PROFILE_DATA_FIELDS)
+        self._meta.get_field('field').choices = choices
+
         super(ProfileDataRule, self).__init__(*args, **kwargs)
 
     def __str__(self):
         return _('GEM Profile Data')
 
     def clean(self):
-        model_name, field_name = self.field.split('__', 1)
-        model = get_model_by_name(model_name)
-        field = model._meta.get_field(field_name)
-
         # Deal with regular expression operator
-        if self.operator == 'reg':
+        if self.operator == self.REGEX:
             # Make sure value is a valid regular expression string
             try:
                 re.compile(self.value)
             except re.error as error:
-                raise ValidationError({'value': 'Regular expression error: {}'.format(error)})
+                raise ValidationError({
+                    'value': _('Regular expression error: %s') % (error,)
+                })
+
 
         # Deal with age opeartors
-        elif self.operator == 'old' or self.operator == 'ygr' \
-                or self.operator == 'eqa':
+        elif self.operator in self.AGE_OPERATORS:
             # Works only on DateField
-            if not isinstance(field, models.DateField):
+            if not isinstance(self.get_related_field(), models.DateField):
                 raise ValidationError({
-                    'operator': [
-                        'You can choose "Of age", "Younger"  or "Older" '
-                        'operator only on date and date-time fields.'
-                    ]
+                    'operator': _('You can choose age operators only on date '
+                                  'and date-time fields.')
                 })
 
             try:
                 self.value = int(self.value)
             except ValueError:
-                raise ValidationError({'value': ['Has to be a whole integer '
-                                                 'when using age operators.']})
+                raise ValidationError({
+                    'value': _('Value has to be a whole integer when using '
+                               'age operators.')
+                })
+            else:
+                if self.value < 0:
+                    raise ValidationError({
+                        'value': _('Value has to be non-negative since it '
+                                   'represents age.')
+                    })
+
 
         # Deal with normal operators
         else:
             # Reassign all errors to the "value" field
             try:
-                field.clean(self.value, None)
+                self.get_related_field().clean(self.value, None)
             except ValidationError as error:
                 raise ValidationError({'value': error})
 
+    def get_related_model_and_field(self):
+        """Get model and field instances from self.field."""
+        model_name, field_name = self.field.split(LOOKUP_SEP, 1)
+        model = apps.get_model(model_name)
+        field = model._meta.get_field(field_name)
+
+        return model, field
+
+    def get_related_model(self):
+        """Get model instance from self.field."""
+        return self.get_related_model_and_field()[0]
+
+    def get_related_field(self):
+        """Get field instance from self.field."""
+        return self.get_related_model_and_field()[1]
+
+    def get_related_field_name(self):
+        """Get field name from self.field."""
+        return self.get_related_field().name
+
+    def get_python_value(self):
+        """Return self.value in its Python format."""
+        # Treat self.value as age and return a whole integer.
+        if self.operator in self.AGE_OPERATORS:
+            return int(self.value)
+
+        # Treat self.value as regex and return regex instance.
+        if self.operator == self.REGEX:
+            return re.compile(self.value)
+
+        # Treat self.value as anything and return value in format specific
+        # to the field in self.field.
+        return self.get_related_field().to_python(self.value)
+
+    def get_related_field_value(self, user):
+        """
+        Get value of a field in self.field. Any model in self.field has to have
+        a direct relationship to the user model.
+        """
+        # Check whether we try to access the main user model, as opposed to
+        # related models.
+        if user._meta.model is self.get_related_model():
+            return getattr(user, self.get_related_field_name())
+
+
+        # Obtain user model's field name with relation to the related model
+        # we need to access, e.g. GemUserProfile would be 'gem_profile'.
+        for f in user._meta.get_fields():
+            if f.related_model is self.get_related_model():
+                instance = getattr(user, f.name)
+                return getattr(instance, self.get_related_field_name())
+
+        raise LookupError('Cannot find related model on user\'s model')
+
+    @property
     def description(self):
-        field_name = ''
-
-        for choice in CHOICES:
-            if choice[0] == self.field:
-                field_name = choice[1]
-                break
-
         description = {
             'title': _('Based on profile data'),
-            'value': _('"{}" {} "{}"').format(
-                field_name or self.field,
+            'value': _('"{}" {} "{}"') % (
+                self._get_FIELD_display(self._meta.get_field('field')),
                 self.get_operator_display(),
                 self.value
             )
@@ -133,81 +214,72 @@ class ProfileDataRule(AbstractBaseRule):
         return description
 
     def test_user(self, request):
+        # Fail segmentation if user is not logged-in
         if not request.user.is_authenticated():
             return False
 
-        model_name, field_name = self.field.split('__', 1)
 
-        if model_name == 'userprofile':
-            instance = request.user.profile
-        elif model_name == 'user':
-            instance = request.user
-        else:
-            raise NotImplementedError('{} not implemented on {}.test_user.'.format(
-                model_name,
-                type(self).__name__
-            ))
+        # Handy variables for comparisons
+        python_value = self.get_python_value()
+        related_field_value = self.get_related_field_value(user=request.user)
 
-        # Check whether given field_name exists
-        if hasattr(instance, field_name):
-            # Deal with regex operator
-            if self.operator == 'reg':
-                if re.match(self.value, str(getattr(instance, field_name))) is not None:
-                    return True
-                else:
-                    return False
 
-            # Deal with age operators
-            elif self.operator == 'age' or self.operator =='old' \
-                    or self.operator == 'ygr':
-                date = getattr(instance, field_name)
-                python_value = int(self.value)
+        # Deal with regex operator
+        if self.operator == self.REGEX:
+            return python_value.match(str(related_field_value)) is not None
 
-                # Field has to be a date or date-time
-                if not isinstance(date, datetime.date):
-                    raise RuntimeError('{} is not a date or datetime instance.')
 
-                # Convert datetime to date if it is a datetime
-                date = date.date() if isinstance(date, datetime.datetime) else date
+        # Deal with age operators
+        if self.operator in self.AGE_OPERATORS:
+            # Convert datetime to date if it is a datetime
+            dob = related_field_value.date() if isinstance(related_field_value,
+                                                           datetime.datetime) \
+                                             else related_field_value
 
-                # Calculate age
-                today = timezone.now().date()
-                age = today.year - date.year - ((today.month, today.day) < (date.month, date.day))
+            # Field has to be a date
+            if not isinstance(dob, datetime.date):
+                raise RuntimeError('{} is not a date or datetime instance.')
 
-                if self.operator == 'age':
-                    return age == python_value
-                elif self.operator == 'ygr':
-                    return age < python_value
-                elif self.operator == 'old':
-                    return age > python_value
-                else:
-                    raise NotImplementedError('Operator "{}" not implemented on {}.'
-                                              'test_user.'.format(self.operator,
-                                                                  type(self).__name__))
+            # Calculate age
+            today = timezone.now().date()
+            age = int((today - dob).days / 365.25)
 
-            # Deal with normal Python operators
-            else:
-                field = type(instance)._meta.get_field(field_name)
-                python_value = field.clean(self.value, None)
+            if self.operator == self.OF_AGE:
+                return age == python_value
 
-                if self.operator == 'lt':
-                    return getattr(instance, field_name) < python_value
-                elif self.operator == 'lte':
-                    return getattr(instance, field_name) <= python_value
-                elif self.operator == 'gt':
-                    return getattr(instance, field_name) > python_value
-                elif self.operator == 'gte':
-                    return getattr(instance, field_name) >= python_value
-                elif self.operator == 'eq':
-                    return getattr(instance, field_name) == python_value
-                elif self.operator == 'neq':
-                    return getattr(instance, field_name) != python_value
+            if self.operator == self.YOUNGER_THAN:
+                return age < python_value
 
-                else:
-                    raise NotImplementedError('Operator "{}" not implemented on {}.'
-                                              'test_user.'.format(self.operator,
-                                                                  type(self).__name__))
+            if self.operator == self.YOUNGER_THAN_OR_EQUAL:
+                return age <= python_value
 
-        # Otherwise just fail
-        return False
+            if self.operator == self.OLDER_THAN:
+                return age > python_value
 
+            if self.operator == self.OLDER_THAN_OR_EQUAL:
+                return age >= python_value
+
+
+        # Deal with comparison operetaros
+        if self.operator == self.LESS_THAN:
+            return related_field_value < python_value
+
+        if self.operator == self.LESS_THAN_OR_EQUAL:
+            return related_field_value <= python_value
+
+        if self.operator == self.GREATER_THAN:
+            return related_field_value > python_value
+
+        if self.operator == self. GREATER_THAN_OR_EQUAL:
+            return related_field_value >= python_value
+
+        if self.operator == self. EQUAL:
+            return related_field_value == python_value
+
+        if self.operator == self. NOT_EQUAL:
+            return related_field_value != python_value
+
+
+        raise NotImplementedError('Operator "{}" not implemented on {}.'
+                                  'test_user.'.format(self.operator,
+                                                      type(self).__name__))
