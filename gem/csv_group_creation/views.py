@@ -2,12 +2,9 @@ from django.contrib.auth.models import Group
 from django.core.urlresolvers import reverse
 from django.shortcuts import render, redirect
 from django.utils.translation import ugettext as _
-from django.views.generic.base import View
 
 from wagtail.wagtailadmin import messages
 from wagtail.wagtailadmin.utils import permission_required
-from wagtail.wagtailcore import hooks
-from wagtail.wagtailusers.forms import GroupPagePermissionFormSet
 from wagtail.wagtailusers.views.groups import get_permission_panel_classes
 
 from .forms import CSVGroupCreationForm
@@ -29,12 +26,18 @@ def create(request):
             for panel in permission_panels:
                 panel.save()
 
-            messages.success(request, _("Group '{0}' created.").format(group), buttons=[
-                messages.button(reverse('wagtailusers_groups:edit', args=(group.id,)), _('Edit'))
-            ])
+            messages.success(
+                request,
+                _("Group '{0}' created. "
+                  "Imported {1} user(s).").format(group, group.user_set.count()),
+                buttons=[
+                    messages.button(reverse('wagtailusers_groups:edit',
+                                            args=(group.id,)), _('Edit'))
+                ]
+            )
             return redirect('wagtailusers_groups:index')
-        else:
-            messages.error(request, _("The group could not be created due to errors."))
+
+        messages.error(request, _("The group could not be created due to errors."))
     else:
         form = CSVGroupCreationForm(instance=group)
         permission_panels = [

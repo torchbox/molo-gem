@@ -12,15 +12,13 @@ class CSVGroupCreationForm(GroupForm):
     """Create group with initial users supplied via CSV file."""
     csv_file = forms.FileField(
         label=_('CSV file'),
-        help_text=_('Please attach a CSV file with one column containing IDs '
-                    'of users that you want to be added to this group.'))
+        help_text=_('Please attach a CSV file with the first column containing '
+                    'usernames of users that you want to be added to '
+                    'this group.'))
 
     def clean_csv_file(self):
         """Read CSV file and save the users to self.initial_users."""
         csv_file = self.cleaned_data['csv_file']
-
-        if csv_file.content_type != 'text/csv':
-            raise forms.ValidationError(_('File has to be of CSV format.'))
 
         # Sniff CSV file
         try:
@@ -35,8 +33,13 @@ class CSVGroupCreationForm(GroupForm):
         csv_file_reader = csv.reader(csv_file, dialect)
 
         # Check whether file has a header
-        if csv.Sniffer().has_header(csv_file.read(1024)):
-            next(csv_file_reader) # Skip the header
+        try:
+            if csv.Sniffer().has_header(csv_file.read(1024)):
+                next(csv_file_reader) # Skip the header
+        except csv.Error:
+            raise forms.ValidationError(_('Uploaded file does not appear to be '
+                                          'in CSV format.'))
+
 
         # Gather all usernames from the CSV file.
         usernames = set()
@@ -48,10 +51,8 @@ class CSVGroupCreationForm(GroupForm):
                 continue
             else:
                 # Skip empty username field
-                if not username:
-                    continue
-
-                usernames.add(username)
+                if username:
+                    usernames.add(username)
 
         if not usernames:
             raise forms.ValidationError(_('Your CSV file does not appear to '
@@ -61,7 +62,7 @@ class CSVGroupCreationForm(GroupForm):
         difference = usernames - set(queryset.values_list('username',
                                                           flat=True))
 
-        if len(difference):
+        if difference:
             raise forms.ValidationError(_('Please make sure your file contains '
                                           'valid data. '
                                           'Those usernames do not exist: '
@@ -69,7 +70,7 @@ class CSVGroupCreationForm(GroupForm):
 
         # Store users temporarily as a property so we can
         # add them when user calls save() on the form.
-        self.__initial_users = queryset.all()
+        self.__initial_users = queryset
 
     def save(self, *args, **kwargs):
         """Save the group instance and add initial users to it."""
