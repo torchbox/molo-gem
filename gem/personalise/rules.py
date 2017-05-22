@@ -225,7 +225,7 @@ class ProfileDataRule(AbstractBaseRule):
         if related_field_value is None:
             # If that value is None, we should fail it unless "not equals"
             # operator is set
-            return True if self.operator == self.NOT_EQUAL else False
+            return self.operator == self.NOT_EQUAL
 
 
         # Deal with regex operator.
