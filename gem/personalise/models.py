@@ -16,6 +16,7 @@ from .rules import ProfileDataRule
 # Force current index page to display our personalised survey
 SurveysIndexPage.subpage_types.append('personalise.PersonalisableSurvey')
 
+
 def get_personalisable_survey_content_panels():
     """
     Replace panel for "survey_form_fields" with
@@ -53,14 +54,13 @@ class PersonalisableSurvey(MoloSurveyPage):
                                                           .session['segments']]
 
             return self.personalisable_survey_form_fields.filter(
-                Q(segment=None) | Q(segment__pk__in=user_segments_pks)
+                Q(segment=None) | Q(segment__id__in=user_segments_pks)
             )
 
         # Return all form fields if there's no request passed
         # (used on the admin site so serve() will not be called).
         return self.personalisable_survey_form_fields \
-                   .select_related('segment') \
-                   .all()
+                   .select_related('segment')
 
     def get_data_fields(self):
         """
@@ -76,8 +76,7 @@ class PersonalisableSurvey(MoloSurveyPage):
             label = field.label
 
             if field.segment:
-                label = '%s (%s)' %(label,
-                                    field.segment.name)
+                label = '%s (%s)' %(label, field.segment.name)
 
             data_fields.append((field.clean_name, label))
 
@@ -86,6 +85,7 @@ class PersonalisableSurvey(MoloSurveyPage):
     def serve(self, request, *args, **kwargs):
         # We need request data in self.get_form_fields() to perform
         # segmentation.
+        #TODO(tmkn): This is quite hacky, need to come up with better solution.
         self.request = request
 
         return super(PersonalisableSurvey, self).serve(request, *args, **kwargs)
@@ -95,12 +95,12 @@ class PersonalisableSurveyFormField(AbstractFormField):
     """
     Form field that has a segment assigned.
     """
-    segment = ParentalKey('personalisation.Segment', on_delete=models.PROTECT,
-                          blank=True, null=True,
-                          help_text=_('Leave it empty to show this field '
-                                      'to every user.'))
     page = ParentalKey(PersonalisableSurvey, on_delete=models.PROTECT,
                        related_name='personalisable_survey_form_fields')
+    segment = models.ForeignKey('personalisation.Segment',
+                                on_delete=models.PROTECT, blank=True, null=True,
+                                help_text=_('Leave it empty to show this field '
+                                            'to every user.'))
 
     panels = [
         FieldPanel('segment')
