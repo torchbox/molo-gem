@@ -1,19 +1,21 @@
 import datetime
+import json
 import re
 
-from django.conf import settings
+from django import forms
 from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
 from django.utils import timezone
-from django.utils.translation import ugettext_lazy as _
 from django.utils.text import capfirst
+from django.utils.translation import ugettext_lazy as _
 
-from wagtail.wagtailadmin.edit_handlers import FieldPanel
+from wagtail.wagtailadmin.edit_handlers import FieldPanel, PageChooserPanel
 
+from molo.surveys.models import MoloSurveySubmission
 from personalisation.rules import AbstractBaseRule
-
 
 PERSONALISATION_PROFILE_DATA_FIELDS = [
     '{}__date_joined'.format(settings.AUTH_USER_MODEL),
@@ -299,3 +301,155 @@ class ProfileDataRule(AbstractBaseRule):
         raise NotImplementedError('Operator "{}" not implemented on {}.'
                                   'test_user.'.format(self.operator,
                                                       type(self).__name__))
+
+
+class SurveySubmissionDataRule(AbstractBaseRule):
+    survey = models.ForeignKey('PersonalisableSurvey',
+                               verbose_name=_('Survey'),
+                               on_delete=models.CASCADE)
+    field_name = models.CharField(_('field name'), max_length=255)
+    expected_response = models.CharField(_('expected response'), max_length=255)
+
+    field_model = None
+    survey_model = None
+    survey_submission_model = MoloSurveySubmission
+
+    panels = [
+        PageChooserPanel('survey'),
+        FieldPanel('field_name'),
+        FieldPanel('expected_response')
+    ]
+
+    def __init__(self, *args, **kwargs):
+        super(SurveySubmissionDataRule, self).__init__(*args, **kwargs)
+
+        self.field_model = apps.get_model('personalise', 'PersonalisableSurveyFormField')
+        self.survey_model = self._meta.get_field('survey').related_model
+
+    class Meta:
+        verbose_name = _('Survey submission rule')
+
+    def get_expected_field(self):
+        try:
+            return self.survey.get_form().fields[self.field_name]
+        except KeyError:
+            raise self.field_model.DoesNotExist
+
+    def get_expected_field_python_value(self, raise_exceptions=True):
+        try:
+            field = self.get_expected_field()
+            python_value = self.expected_response
+
+            if isinstance(field, forms.MultipleChoiceField):
+                try:
+                    python_value = json.loads(self.expected_response)
+                except ValueError:
+                    raise ValidationError({
+                        'expected_response': [
+                            _('For multiple choices fields please use format: '
+                              '["selection1", "selection2"].')
+                        ]
+                    })
+
+                if not isinstance(python_value, list):
+                    raise ValidationError({
+                        'expected_response': [
+                            _('For multiple choices fields please use format: '
+                              '["selection1", "selection2"].')
+                        ]
+                    })
+
+            if isinstance(field, forms.BooleanField):
+                try:
+                    python_value = int(self.expected_response)
+                except ValueError:
+                    raise ValidationError({
+                        'expected_response': [
+                            _('Please use "0" or "1" on this field.')
+                        ]
+                    })
+                else:
+                    if python_value not in (0, 1):
+                        raise ValidationError({
+                            'expected_response': [
+                                _('Please use "0" or "1" on this field.')
+                            ]
+                        })
+
+            return python_value
+        except ValidationError:
+            if raise_exceptions:
+                raise
+        except self.field_model.DoesNotExist:
+            if raise_exceptions:
+                raise
+
+    def get_survey_submission_of_user(self, user):
+        return self.survey_submission_model.objects.get(user=user, page=self.survey)
+
+    def clean(self):
+        # Make sure field name is a valid name
+        field_names = [f.clean_name for f in self.survey.get_form_fields()]
+
+        if self.field_name not in field_names:
+            raise ValidationError({
+                'field_name': [_('You need to choose valid field name out '
+                                 'of: "%s".') % '", "'.join(field_names)]
+            })
+
+        # Convert value from the rule into Python value.
+        python_value = self.get_expected_field_python_value()
+
+        # Get this particular's field instance from the survey's form
+        # so we can do validation on the value.
+        try:
+            self.get_expected_field().clean(python_value)
+        except ValidationError as error:
+            raise ValidationError({
+                'expected_response': error
+            })
+
+    def test_user(self, request):
+        # Must be logged-in to use this rule
+        if not request.user.is_authenticated():
+            return False
+
+        try:
+            survey_submission = self.get_survey_submission_of_user(request.user)
+        except self.survey_submission_model.DoesNotExist:
+            # No survey found so return false
+            return False
+        except self.survey_submission_model.MultipleObjectsReturned:
+            # There should not be two survey submissions, but just in case
+            # let's return false since we don't want to be guessing what user
+            # meant in their response.
+            return False
+
+        # Get dict with user's survey submission to a particular question
+        user_response = survey_submission.get_data().get(self.field_name)
+
+        if not user_response:
+            return False
+
+        # Compare user's response
+        try:
+            return user_response == self.get_expected_field_python_value()
+        except ValidationError:
+            # In case survey has been modified and we cannot obtain Python
+            # value, we want to return false.
+            return False
+        except self.field_model.DoesNotExist:
+            # In case field does not longer exist on the survey
+            # return false. We cannot compare its value if
+            # we do not know its type (hence it needs to be on the survey).
+            return False
+
+    def description(self):
+        return {
+            'title': _('Based on survey submission'),
+            'value': _('"%s" %s "%s"') % (
+                self.survey,
+                self.field_name,
+                self.expected_response
+            )
+        }
