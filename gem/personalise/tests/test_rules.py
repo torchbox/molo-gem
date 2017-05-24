@@ -279,8 +279,6 @@ class TestProfileDataRuleSegmentation(TestCase):
             expected_response='1',
             field_name=self.checkbox.clean_name)
 
-        print()
-
         self.assertTrue(rule.test_user(self.request))
 
     def test_failing_checkbox_rule(self):

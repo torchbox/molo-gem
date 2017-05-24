@@ -8,7 +8,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
-from django.utils import timezone
+from django.utils import six, timezone
 from django.utils.functional import cached_property
 from django.utils.text import capfirst
 from django.utils.translation import ugettext_lazy as _
@@ -355,15 +355,14 @@ class SurveySubmissionDataRule(AbstractBaseRule):
 
             if isinstance(field, forms.MultipleChoiceField):
                 # Eliminate duplicates, strip whitespaces, eliminate empty values
-                python_value = list(set([val.strip() for val in
-                                         self.expected_response.split(',')
-                                         if val]))
+                python_value = [v for v in {v.strip() for v in
+                                            self.expected_response.split(',')}
+                                if v]
                 self.expected_response = ','.join(python_value)
 
                 return python_value
 
             if isinstance(field, forms.BooleanField):
-                print('boolean')
                 if self.expected_response not in '01':
                     raise ValidationError({
                         'expected_response': [
@@ -437,13 +436,13 @@ class SurveySubmissionDataRule(AbstractBaseRule):
             if isinstance(python_value, list) \
                     and isinstance(user_response, list):
                 if self.operator == self.CONTAINS:
-                    return set(python_value).issubset(set(user_response))
+                    return set(python_value).issubset(user_response)
 
                 if self.operator == self.EQUALS:
                     return set(python_value) == set(user_response)
 
-            if isinstance(python_value, basestring) \
-                    and isinstance(user_response, basestring):
+            if isinstance(python_value, six.string_types) \
+                    and isinstance(user_response, six.string_types):
                 if self.operator == self.CONTAINS:
                     return python_value.lower() in user_response.lower()
 
