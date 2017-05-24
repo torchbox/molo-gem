@@ -9,6 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
 from django.utils import timezone
+from django.utils.functional import cached_property
 from django.utils.text import capfirst
 from django.utils.translation import ugettext_lazy as _
 
@@ -304,30 +305,41 @@ class ProfileDataRule(AbstractBaseRule):
 
 
 class SurveySubmissionDataRule(AbstractBaseRule):
+    EQUALS = 'eq'
+    CONTAINS = 'in'
+
+    OPERATOR_CHOICES = (
+        (EQUALS, _('equals')),
+        (CONTAINS, _('contains')),
+    )
+
     survey = models.ForeignKey('PersonalisableSurvey',
-                               verbose_name=_('Survey'),
+                               verbose_name=_('survey'),
                                on_delete=models.CASCADE)
     field_name = models.CharField(_('field name'), max_length=255)
-    expected_response = models.CharField(_('expected response'), max_length=255)
-
-    field_model = None
-    survey_model = None
-    survey_submission_model = MoloSurveySubmission
+    expected_response = models.CharField(
+        _('expected response'), max_length=255,
+        help_text=_('Multiple choice values must be separated with commas.'))
+    operator = models.CharField(_('operator'), max_length=3,
+                                choices=OPERATOR_CHOICES, default=CONTAINS)
 
     panels = [
         PageChooserPanel('survey'),
         FieldPanel('field_name'),
+        FieldPanel('operator'),
         FieldPanel('expected_response')
     ]
 
-    def __init__(self, *args, **kwargs):
-        super(SurveySubmissionDataRule, self).__init__(*args, **kwargs)
-
-        self.field_model = apps.get_model('personalise', 'PersonalisableSurveyFormField')
-        self.survey_model = self._meta.get_field('survey').related_model
-
     class Meta:
         verbose_name = _('Survey submission rule')
+
+    @cached_property
+    def field_model(self):
+        return apps.get_model('personalise', 'PersonalisableSurveyFormField')
+
+    @property
+    def survey_submission_model(self):
+        return MoloSurveySubmission
 
     def get_expected_field(self):
         try:
@@ -338,56 +350,42 @@ class SurveySubmissionDataRule(AbstractBaseRule):
     def get_expected_field_python_value(self, raise_exceptions=True):
         try:
             field = self.get_expected_field()
+            self.expected_response = self.expected_response.strip()
             python_value = self.expected_response
 
             if isinstance(field, forms.MultipleChoiceField):
-                try:
-                    python_value = json.loads(self.expected_response)
-                except ValueError:
-                    raise ValidationError({
-                        'expected_response': [
-                            _('For multiple choices fields please use format: '
-                              '["selection1", "selection2"].')
-                        ]
-                    })
+                # Eliminate duplicates, strip whitespaces, eliminate empty values
+                python_value = list(set([val.strip() for val in
+                                         self.expected_response.split(',')
+                                         if val]))
+                self.expected_response = ','.join(python_value)
 
-                if not isinstance(python_value, list):
-                    raise ValidationError({
-                        'expected_response': [
-                            _('For multiple choices fields please use format: '
-                              '["selection1", "selection2"].')
-                        ]
-                    })
+                return python_value
 
             if isinstance(field, forms.BooleanField):
-                try:
-                    python_value = int(self.expected_response)
-                except ValueError:
+                print('boolean')
+                if self.expected_response not in '01':
                     raise ValidationError({
                         'expected_response': [
                             _('Please use "0" or "1" on this field.')
                         ]
                     })
-                else:
-                    if python_value not in (0, 1):
-                        raise ValidationError({
-                            'expected_response': [
-                                _('Please use "0" or "1" on this field.')
-                            ]
-                        })
+                return self.expected_response == '1'
 
             return python_value
-        except ValidationError:
-            if raise_exceptions:
-                raise
-        except self.field_model.DoesNotExist:
+
+        except (ValidationError, self.field_model.DoesNotExist):
             if raise_exceptions:
                 raise
 
     def get_survey_submission_of_user(self, user):
-        return self.survey_submission_model.objects.get(user=user, page=self.survey)
+        return self.survey_submission_model.objects.get(user=user, page_id=self.survey_id)
 
     def clean(self):
+        # Do not call clean() if we have no survey set.
+        if not self.survey_id:
+            return
+
         # Make sure field name is a valid name
         field_names = [f.clean_name for f in self.survey.get_form_fields()]
 
@@ -431,9 +429,27 @@ class SurveySubmissionDataRule(AbstractBaseRule):
         if not user_response:
             return False
 
+        python_value = self.get_expected_field_python_value()
+
         # Compare user's response
         try:
-            return user_response == self.get_expected_field_python_value()
+            # Convert lists to sets for easy comparison
+            if isinstance(python_value, list) \
+                    and isinstance(user_response, list):
+                if self.operator == self.CONTAINS:
+                    return set(python_value).issubset(set(user_response))
+
+                if self.operator == self.EQUALS:
+                    return set(python_value) == set(user_response)
+
+            if isinstance(python_value, basestring) \
+                    and isinstance(user_response, basestring):
+                if self.operator == self.CONTAINS:
+                    return python_value.lower() in user_response.lower()
+
+                return python_value.lower() == user_response.lower()
+
+            return python_value == user_response
         except ValidationError:
             # In case survey has been modified and we cannot obtain Python
             # value, we want to return false.
@@ -445,11 +461,16 @@ class SurveySubmissionDataRule(AbstractBaseRule):
             return False
 
     def description(self):
+        try:
+            field_name = self.get_expected_field().label
+        except self.field_model.DoesNotExist:
+            field_name = self.field_name
+
         return {
-            'title': _('Based on survey submission'),
-            'value': _('"%s" %s "%s"') % (
+            'title': _('Based on survey submission of users'),
+            'value': _('%s - %s  "%s"') % (
                 self.survey,
-                self.field_name,
+                field_name,
                 self.expected_response
             )
         }
