@@ -473,3 +473,33 @@ class SurveySubmissionDataRule(AbstractBaseRule):
                 self.expected_response
             )
         }
+
+
+class GroupMembershipRule(AbstractBaseRule):
+    """wagtail-personalisation rule based on user's group membership."""
+    group = models.ForeignKey('auth.Group', on_delete=models.PROTECT,
+                              help_text=_('User must be part of this group to '
+                                          'activate the rule.'))
+
+    panels = [
+        FieldPanel('group')
+    ]
+
+    class Meta:
+        verbose_name = _('Group membership rule')
+
+    def description(self):
+        return {
+            'title': _('Based on survey group memberships of users'),
+            'value': _('Member of: "%s"') % self.group
+        }
+
+    def test_user(self, request):
+        # Ignore not-logged in users
+        if not request.user.is_authenticated():
+            return False
+
+        if self.group_id in request.user.groups.values_list('id', flat=True):
+            return True
+
+        return False
