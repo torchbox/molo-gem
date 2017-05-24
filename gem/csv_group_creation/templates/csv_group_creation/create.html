@@ -15,22 +15,9 @@
             <ul class="fields">
                 {% include "wagtailadmin/shared/field_as_li.html" with field=form.name %}
                 {% include "wagtailadmin/shared/field_as_li.html" with field=form.csv_file %}
-                <li>
-                    {% format_permissions permission_bound_field=form.permissions %}
-                </li>
-                {% for panel in permission_panels %}
-                    <li>
-                        {{ panel.as_admin_panel }}
-                    </li>
-                {% endfor %}
 
                 <li><input type="submit" value='{% trans "Add group" %}' class="button" /></li>
             </ul>
         </form>
     </div>
-{% endblock %}
-
-{% block extra_js %}
-    {{ block.super }}
-    {% include "wagtailusers/groups/includes/group_form_js.html" %}
 {% endblock %}

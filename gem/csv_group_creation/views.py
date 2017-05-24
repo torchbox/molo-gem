@@ -5,7 +5,6 @@ from django.utils.translation import ugettext as _
 
 from wagtail.wagtailadmin import messages
 from wagtail.wagtailadmin.utils import permission_required
-from wagtail.wagtailusers.views.groups import get_permission_panel_classes
 
 from .forms import CSVGroupCreationForm
 
@@ -15,16 +14,8 @@ def create(request):
     group = Group()
     if request.method == 'POST':
         form = CSVGroupCreationForm(request.POST, request.FILES, instance=group)
-        permission_panels = [
-            cls(request.POST, instance=group)
-            for cls in get_permission_panel_classes()
-        ]
-
-        if form.is_valid() and all(panel.is_valid() for panel in permission_panels):
+        if form.is_valid():
             form.save()
-
-            for panel in permission_panels:
-                panel.save()
 
             messages.success(
                 request,
@@ -40,12 +31,7 @@ def create(request):
         messages.error(request, _("The group could not be created due to errors."))
     else:
         form = CSVGroupCreationForm(instance=group)
-        permission_panels = [
-            cls(instance=group)
-            for cls in get_permission_panel_classes()
-        ]
 
     return render(request, 'csv_group_creation/create.html', {
-        'form': form,
-        'permission_panels': permission_panels,
+        'form': form
     })

@@ -5,16 +5,20 @@ from django.contrib.auth import get_user_model
 from django.utils.encoding import force_text
 from django.utils.translation import ugettext_lazy as _
 
-from wagtail.wagtailusers.forms import GroupForm
+from django.contrib.auth.models import Group
 
 
-class CSVGroupCreationForm(GroupForm):
+class CSVGroupCreationForm(forms.ModelForm):
     """Create group with initial users supplied via CSV file."""
     csv_file = forms.FileField(
         label=_('CSV file'),
         help_text=_('Please attach a CSV file with the first column containing '
                     'usernames of users that you want to be added to '
                     'this group.'))
+
+    class Meta:
+        model = Group
+        fields = ("name",)
 
     def clean_csv_file(self):
         """Read CSV file and save the users to self.initial_users."""
@@ -61,7 +65,6 @@ class CSVGroupCreationForm(GroupForm):
         queryset = get_user_model().objects.filter(username__in=usernames)
         difference = usernames - set(queryset.values_list('username',
                                                           flat=True))
-
         if difference:
             raise forms.ValidationError(_('Please make sure your file contains '
                                           'valid data. '
