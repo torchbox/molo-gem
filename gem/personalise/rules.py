@@ -499,7 +499,5 @@ class GroupMembershipRule(AbstractBaseRule):
         if not request.user.is_authenticated():
             return False
 
-        if self.group_id in request.user.groups.values_list('id', flat=True):
-            return True
-
-        return False
+        # Check whether user is part of a group
+        return request.user.groups.filter(id=self.group_id).exists()
