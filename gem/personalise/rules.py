@@ -529,20 +529,11 @@ class CommentDataRule(AbstractBaseRule):
             return False
 
         # Construct a queryset with user comments
-        queryset = request.user.comment_comments
+        comments = request.user.comment_comments
 
-        # Filter queryset based on operator
-        if self.operator == self.EQUALS:
-            queryset = queryset.filter(comment__iexact=self.expected_content)
-
-        if self.operator == self.CONTAINS:
-            queryset = queryset.filter(comment__icontains=self.expected_content)
-
-        # Check whether the rule condition is fullfiled
-        if queryset.exists():
-            return True
-
-        return False
+        return comments.filter(
+            **{'comment__i' + ('exact' if self.operator == self.EQUALS
+                               else 'contains'): self.expected_content}).exists()
 
     def description(self):
         return {
