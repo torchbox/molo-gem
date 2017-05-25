@@ -97,8 +97,8 @@ class PersonalisableSurvey(MoloSurveyPage):
         self.request = request
 
         # Check whether it is segmented and raise 404 if segments do not match
-        if self.segment:
-            if self.segment.id not in [int(s.get('id'))
+        if self.segment_id:
+            if self.segment_id not in [int(s.get('id'))
                                        for s in request.session['segments']]:
                 raise Http404("Survey does not match your segments.")
 
