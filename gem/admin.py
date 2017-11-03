@@ -31,10 +31,37 @@ from molo.surveys.admin import SegmentUserGroupAdmin
 from molo.surveys.models import SegmentUserGroup
 
 from wagtail.contrib.modeladmin.views import IndexView
+from wagtail.contrib.modeladmin.helpers import PermissionHelper
 from wagtail.wagtailadmin import messages
 from wagtail.wagtailcore.models import Site
 
 from .admin_forms import FrontEndAgeToDateOfBirthFilter, UserListForm
+
+
+def download_as_csv_gem(self, request, queryset):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment;filename=export.csv'
+    writer = csv.writer(response)
+    user_model_fields = (
+        'username', 'email', 'first_name',
+        'last_name', 'is_staff', 'date_joined')
+    profile_fields = ('alias', 'mobile_number', 'date_of_birth')
+    gem_profile_fields = ('gender',)
+    field_names = user_model_fields + profile_fields + gem_profile_fields
+    writer.writerow(field_names)
+    for obj in queryset:
+        if hasattr(obj, 'gem_profile'):
+            if obj.profile.alias:
+                obj.profile.alias = obj.profile.alias.encode('utf-8')
+            obj.username = obj.username.encode('utf-8')
+            obj.date_joined = obj.date_joined.strftime("%Y-%m-%d %H:%M")
+            writer.writerow(
+                [getattr(obj, field) for field in user_model_fields] +
+                [getattr(obj.profile, field) for field in profile_fields] +
+                [getattr(
+                    obj.gem_profile, field) for field in gem_profile_fields])
+    return response
+download_as_csv_gem.short_description = "Download selected as csv gem"
 
 
 class GemUserProfileInlineModelAdmin(admin.StackedInline):
@@ -150,11 +177,11 @@ class GemMergedCMSUserResource(ModelResource):
         instance.gem_profile.save()
 
 
-class GemUserAdmin(ProfileUserAdmin):
+class GemUserAdmin(ImportExportModelAdmin, ProfileUserAdmin):
     resource_class = GemMergedCMSUserResource
     inlines = (GemUserProfileInlineModelAdmin, UserProfileInlineModelAdmin)
     list_display = ProfileUserAdmin.list_display + ('gem_gender',)
-    actions = None
+    actions = ProfileUserAdmin.actions + [download_as_csv_gem]
     list_filter = ('gem_profile__gender',)
 
     def gem_gender(self, obj):
@@ -163,17 +190,20 @@ class GemUserAdmin(ProfileUserAdmin):
 
 class GemFrontendUsersAdminView(FrontendUsersAdminView):
     def send_export_email_to_celery(self, email, arguments):
-        pass
+        send_export_email_gem.delay(email, arguments)
 
     def get_template_names(self):
         return 'admin/gem_frontend_users_admin_view.html'
 
     def post(self, request, *args, **kwargs):
+        if 'email' in request.POST:
+            return super(GemFrontendUsersAdminView, self).post(request, *args, **kwargs)
         qs = self.get_queryset(request)
         form = UserListForm(qs, data=request.POST)
-        if form.is_valid() and form.cleaned_data:
+        if form.is_valid():
             ids = [user_id for user_id, checked in form.cleaned_data.items() if checked]
-            qs = qs.filter(id__in=ids)
+            if ids:
+                qs = qs.filter(id__in=ids)
 
         if qs.exists():
             group = SegmentUserGroup.objects.create(
@@ -197,7 +227,14 @@ class GemFrontendUsersAdminView(FrontendUsersAdminView):
         )
 
 
+class SegementUserPermissionHelper(PermissionHelper):
+    def __init__(self, model, inspect_view_enabled=False):
+        model = SegmentUserGroup
+        super(SegementUserPermissionHelper, self).__init__(model, inspect_view_enabled)
+
+
 class GemFrontendUsersModelAdmin(FrontendUsersModelAdmin):
+    permission_helper_class = SegementUserPermissionHelper
     list_display = ('id', 'username', '_date_of_birth', 'is_active', 'last_login', 'gender',)
     index_view_class = GemFrontendUsersAdminView
     index_view_extra_js = [static('js/modeladmin/index.js')]
