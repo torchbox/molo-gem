@@ -416,6 +416,8 @@ GOOGLE_ANALYTICS_IGNORE_PATH = [
     '/metrics',
     # REST API
     '/api/',
+    # PWA serviceworker
+    '/serviceworker.js',
 ]
 
 CUSTOM_GOOGLE_ANALYTICS_IGNORE_PATH = environ.get(

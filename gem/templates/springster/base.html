@@ -96,7 +96,8 @@
     <div id="content-wrapper" class="content-wrapper">
       <div class="content">
         {% display_unread_notifications %}
-        {% block content %}{% endblock %}
+        {% block content %}
+        {% endblock %}
 
         {% block breadcrumbs %}
           {% breadcrumbs %}
@@ -123,6 +124,9 @@
     </div>
     {% block google_analytics %}
       {% include "patterns/components/ga_tag_manager.html" %}
+    {% endblock %}
+    {% block facebook_pixel_tracker %}
+      {% include "patterns/components/facebook_pixel_tracker.html" %}
     {% endblock %}
     {% block facebook_analytics %}
       {% include "core/facebook_analytics.html" %}
